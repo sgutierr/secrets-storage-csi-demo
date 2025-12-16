@@ -1,0 +1,55 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  labels:
+    app: hashicorp-vault-server
+  name: hashicorp-vault-server
+  namespace: openshift-gitops
+spec:
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: vault
+  project: default
+  source:
+    repoURL: https://helm.releases.hashicorp.com
+    targetRevision: 0.29.1
+    chart: vault
+    helm:
+      valuesObject:
+        global:
+          openshift: true
+        injector:
+          enabled: false
+        server:
+          dev:
+            enabled: true
+          route:
+            enabled: true
+            host: ''
+            tls: 
+              termination: edge
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: false
+    syncOptions:
+      - CreateNamespace=true
+  # ignoreDifferences:
+  #   - group: admissionregistration.k8s.io
+  #     kind: MutatingWebhookConfiguration
+  #     jqPathExpressions:
+  #       - .webhooks[]?.clientConfig.caBundle
+---
+apiVersion: console.openshift.io/v1
+kind: ConsoleLink
+metadata:
+  name: vault-hashicorp-vault-server
+spec:
+  href: "https://hashicorp-vault-server-vault.apps.$CLUSTER_DOMAIN"
+  location: ApplicationMenu
+  text: "HashiCorp Vault Server"
+  applicationMenu:
+    section: GitOps
+    imageURL: "https://hashicorp-vault-server-vault.apps.$CLUSTER_DOMAIN/ui/favicon-c02e22ca67f83a0fb6f2fd265074910a.png"
+
