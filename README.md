@@ -97,9 +97,6 @@ kubectl apply -f applications/application-argocd-external-secrets-rbac.yaml
 # RBAC para namespace test-secrets
 kubectl apply -f applications/application-argocd-test-secrets-rbac.yaml
 
-# RBAC para namespace db-app (necesario para Secrets Store CSI Driver)
-kubectl apply -f applications/application-argocd-db-app-rbac.yaml
-
 # RBAC para namespace kube-system (necesario para Secrets Store CSI Driver)
 kubectl apply -f applications/application-argocd-kube-system-rbac.yaml
 
@@ -142,13 +139,13 @@ kubectl apply -f applications/application-external-secrets-operator.yaml
 
 ### 5. Configurar Pod Security para namespaces
 
-Los namespaces `db-app` y `openshift-cluster-csi-drivers` necesitan tener la etiqueta de seguridad de pods configurada como `privileged` para permitir que los pods con volúmenes CSI se ejecuten. Esto se aplicará automáticamente cuando se despliegue la Application de secrets-storage-csi, pero también puedes aplicarlo manualmente:
+Los namespaces `test-secrets` y `openshift-cluster-csi-drivers` necesitan tener la etiqueta de seguridad de pods configurada como `privileged` para permitir que los pods con volúmenes CSI se ejecuten. Esto se aplicará automáticamente cuando se despliegue la Application de secrets-storage-csi, pero también puedes aplicarlo manualmente:
 
 ```bash
-# Configurar pod security para db-app
-oc label ns db-app "pod-security.kubernetes.io/enforce=privileged" --overwrite
-oc label ns db-app "pod-security.kubernetes.io/audit=privileged" --overwrite
-oc label ns db-app "pod-security.kubernetes.io/warn=privileged" --overwrite
+# Configurar pod security para test-secrets
+oc label ns test-secrets "pod-security.kubernetes.io/enforce=privileged" --overwrite
+oc label ns test-secrets "pod-security.kubernetes.io/audit=privileged" --overwrite
+oc label ns test-secrets "pod-security.kubernetes.io/warn=privileged" --overwrite
 
 # Configurar pod security para openshift-cluster-csi-drivers
 oc label ns openshift-cluster-csi-drivers "pod-security.kubernetes.io/enforce=privileged" --overwrite
@@ -159,11 +156,11 @@ oc label ns openshift-cluster-csi-drivers "pod-security.kubernetes.io/warn=privi
 O aplicar los archivos YAML directamente:
 
 ```bash
-kubectl apply -f deploy/secrets-storage/db-app-namespace.yaml
+kubectl apply -f deploy/secrets-storage/test-secrets-namespace.yaml
 kubectl apply -f deploy/secrets-storage/openshift-cluster-csi-drivers-namespace.yaml
 ```
 
-**Nota**: Los archivos `db-app-namespace.yaml` y `openshift-cluster-csi-drivers-namespace.yaml` se incluyen en la carpeta `deploy/secrets-storage` y se aplicarán automáticamente cuando se despliegue la Application de secrets-storage-csi. Sin embargo, si el namespace `openshift-cluster-csi-drivers` ya existe (creado por el operador), puede que necesites aplicar las etiquetas manualmente.
+**Nota**: Los archivos `test-secrets-namespace.yaml` y `openshift-cluster-csi-drivers-namespace.yaml` se incluyen en la carpeta `deploy/secrets-storage` y se aplicarán automáticamente cuando se despliegue la Application de secrets-storage-csi. Sin embargo, si los namespaces ya existen (creados por otras Applications), puede que necesites aplicar las etiquetas manualmente.
 
 ### 6. Desplegar Secrets Store CSI Driver
 
@@ -178,9 +175,9 @@ Esta Application desplegará:
 - SecurityContextConstraint (SCC) para el Vault CSI Provider (requerido en OpenShift)
 - Configuración del Vault CSI Provider (DaemonSet)
 - Roles y RoleBindings necesarios
-- Configuración de los namespaces `db-app` y `openshift-cluster-csi-drivers` con pod security `privileged`
-- SecretProviderClass de ejemplo
-- Pod de demostración que usa el CSI Driver
+- Configuración de los namespaces `test-secrets` y `openshift-cluster-csi-drivers` con pod security `privileged`
+- SecretProviderClass de ejemplo en el namespace `test-secrets`
+- Deployment de demostración que usa el CSI Driver en el namespace `test-secrets`
 
 ### 7. Verificar el despliegue
 
@@ -239,9 +236,9 @@ EOF
 ### 5. Crear roles de Kubernetes
 
 ```bash
-vault write auth/kubernetes/role/database \
-  bound_service_account_names=db-app-sa \
-  bound_service_account_namespaces=db-app \
+vault write auth/kubernetes/role/webapp \
+  bound_service_account_names=default \
+  bound_service_account_namespaces=test-secrets \
   policies=database-app \
   ttl=20m
 ```
@@ -315,10 +312,14 @@ kubectl get daemonset -n openshift-cluster-csi-drivers | grep vault-csi-provider
 kubectl get pods -n openshift-cluster-csi-drivers | grep vault-csi-provider
 
 # Verificar SecretProviderClass
-kubectl get secretproviderclass -n db-app
+kubectl get secretproviderclass -n test-secrets
 
-# Verificar el pod de demostración que usa el CSI Driver
-kubectl get pods -n db-app
+# Verificar el deployment de demostración que usa el CSI Driver
+kubectl get deployment -n test-secrets
+kubectl get pods -n test-secrets
+
+# Verificar los logs del deployment para ver los secretos montados
+kubectl logs -n test-secrets -l app=test-secrets-store-csi-driver
 ```
 
 ## Troubleshooting
@@ -336,7 +337,6 @@ deployments.apps is forbidden: User "system:serviceaccount:openshift-gitops:open
 kubectl get role,rolebinding -n external-secrets
 kubectl get role,rolebinding -n test-secrets
 kubectl get role,rolebinding -n vault
-kubectl get role,rolebinding -n db-app
 kubectl get role,rolebinding -n kube-system
 kubectl get role,rolebinding -n openshift-cluster-csi-drivers
 ```
@@ -402,26 +402,26 @@ Si los ExternalSecrets no están sincronizando:
 
 ### Error: Pod Security Policy - "uses an inline volume provided by CSIDriver"
 
-Si encuentras el siguiente error al desplegar el pod `dbapp`:
+Si encuentras el siguiente error al desplegar el deployment `test-secrets-store-csi-driver`:
 
 ```
-pods "dbapp" is forbidden: dbapp uses an inline volume provided by CSIDriver secrets-store.csi.k8s.io and namespace db-app has a pod security enforce level that is lower than privileged
+pods "test-secrets-store-csi-driver-" is forbidden: test-secrets-store-csi-driver uses an inline volume provided by CSIDriver secrets-store.csi.k8s.io and namespace test-secrets has a pod security enforce level that is lower than privileged
 ```
 
-**Solución**: El namespace `db-app` necesita tener la etiqueta de seguridad de pods configurada como `privileged` para permitir que los pods con volúmenes CSI se ejecuten. Aplica la siguiente configuración:
+**Solución**: El namespace `test-secrets` necesita tener la etiqueta de seguridad de pods configurada como `privileged` para permitir que los pods con volúmenes CSI se ejecuten. Aplica la siguiente configuración:
 
 ```bash
 # Aplicar las etiquetas de pod security
-oc label ns db-app "pod-security.kubernetes.io/enforce=privileged" --overwrite
-oc label ns db-app "pod-security.kubernetes.io/audit=privileged" --overwrite
-oc label ns db-app "pod-security.kubernetes.io/warn=privileged" --overwrite
+oc label ns test-secrets "pod-security.kubernetes.io/enforce=privileged" --overwrite
+oc label ns test-secrets "pod-security.kubernetes.io/audit=privileged" --overwrite
+oc label ns test-secrets "pod-security.kubernetes.io/warn=privileged" --overwrite
 ```
 
 O verifica que el namespace tenga las etiquetas correctas:
 
 ```bash
 # Verificar las etiquetas del namespace
-oc get namespace db-app -o yaml | grep pod-security
+oc get namespace test-secrets -o yaml | grep pod-security
 ```
 
 El namespace debería tener las siguientes etiquetas:
@@ -431,10 +431,10 @@ El namespace debería tener las siguientes etiquetas:
 
 ### Error: "provider not found: provider 'vault'"
 
-Si encuentras el siguiente error al desplegar el pod `dbapp`:
+Si encuentras el siguiente error al desplegar el deployment `test-secrets-store-csi-driver`:
 
 ```
-failed to mount secrets store objects for pod db-app/dbapp, err: error connecting to provider "vault": provider not found: provider "vault"
+failed to mount secrets store objects for pod test-secrets/test-secrets-store-csi-driver-, err: error connecting to provider "vault": provider not found: provider "vault"
 ```
 
 **Solución**: Este error indica que el Vault CSI Provider no está disponible. Sigue estos pasos para solucionarlo:
@@ -559,6 +559,8 @@ kubectl get daemonset vault-csi-provider -n openshift-cluster-csi-drivers
 kubectl get pods -n openshift-cluster-csi-drivers | grep vault-csi-provider
 ```
 
+**Nota sobre el error de patch del SCC**: Si ves un error de timeout al parchear el SCC, puede ser porque el SCC ya existe y ArgoCD está intentando actualizarlo. En este caso, puedes aplicar el SCC manualmente antes de desplegar la Application, o simplemente esperar a que ArgoCD complete la sincronización en un segundo intento. El ClusterRole `argocd-crd-manager` ya tiene permisos para crear y parchear SecurityContextConstraints.
+
 ## Estructura del Proyecto
 
 ```
@@ -567,7 +569,6 @@ kubectl get pods -n openshift-cluster-csi-drivers | grep vault-csi-provider
 │   ├── application-argocd-vault-rbac.yaml
 │   ├── application-argocd-external-secrets-rbac.yaml
 │   ├── application-argocd-test-secrets-rbac.yaml
-│   ├── application-argocd-db-app-rbac.yaml
 │   ├── application-argocd-kube-system-rbac.yaml
 │   ├── application-argocd-openshift-cluster-csi-drivers-rbac.yaml
 │   ├── application-external-secrets-operator.yaml
@@ -581,7 +582,6 @@ kubectl get pods -n openshift-cluster-csi-drivers | grep vault-csi-provider
 │   │   ├── argocd-vault-rbac.yaml
 │   │   ├── argocd-external-secrets-rbac.yaml
 │   │   ├── argocd-test-secrets-rbac.yaml
-│   │   ├── argocd-db-app-rbac.yaml
 │   │   ├── argocd-kube-system-rbac.yaml
 │   │   └── argocd-openshift-cluster-csi-drivers-rbac.yaml
 │   └── secrets-storage/                   # Configuración CSI Driver
