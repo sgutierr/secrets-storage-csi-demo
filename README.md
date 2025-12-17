@@ -140,7 +140,32 @@ O aplica directamente:
 kubectl apply -f applications/application-external-secrets-operator.yaml
 ```
 
-### 5. Desplegar Secrets Store CSI Driver
+### 5. Configurar Pod Security para namespaces
+
+Los namespaces `db-app` y `openshift-cluster-csi-drivers` necesitan tener la etiqueta de seguridad de pods configurada como `privileged` para permitir que los pods con volúmenes CSI se ejecuten. Esto se aplicará automáticamente cuando se despliegue la Application de secrets-storage-csi, pero también puedes aplicarlo manualmente:
+
+```bash
+# Configurar pod security para db-app
+oc label ns db-app "pod-security.kubernetes.io/enforce=privileged" --overwrite
+oc label ns db-app "pod-security.kubernetes.io/audit=privileged" --overwrite
+oc label ns db-app "pod-security.kubernetes.io/warn=privileged" --overwrite
+
+# Configurar pod security para openshift-cluster-csi-drivers
+oc label ns openshift-cluster-csi-drivers "pod-security.kubernetes.io/enforce=privileged" --overwrite
+oc label ns openshift-cluster-csi-drivers "pod-security.kubernetes.io/audit=privileged" --overwrite
+oc label ns openshift-cluster-csi-drivers "pod-security.kubernetes.io/warn=privileged" --overwrite
+```
+
+O aplicar los archivos YAML directamente:
+
+```bash
+kubectl apply -f deploy/secrets-storage/db-app-namespace.yaml
+kubectl apply -f deploy/secrets-storage/openshift-cluster-csi-drivers-namespace.yaml
+```
+
+**Nota**: Los archivos `db-app-namespace.yaml` y `openshift-cluster-csi-drivers-namespace.yaml` se incluyen en la carpeta `deploy/secrets-storage` y se aplicarán automáticamente cuando se despliegue la Application de secrets-storage-csi. Sin embargo, si el namespace `openshift-cluster-csi-drivers` ya existe (creado por el operador), puede que necesites aplicar las etiquetas manualmente.
+
+### 6. Desplegar Secrets Store CSI Driver
 
 Despliega la configuración del Secrets Store CSI Driver (CRDs, roles, providers, etc.):
 
@@ -150,12 +175,14 @@ kubectl apply -f applications/application-secrets-storage-csi.yaml
 
 Esta Application desplegará:
 - CustomResourceDefinitions para SecretProviderClass
-- Configuración del Vault CSI Provider
+- SecurityContextConstraint (SCC) para el Vault CSI Provider (requerido en OpenShift)
+- Configuración del Vault CSI Provider (DaemonSet)
 - Roles y RoleBindings necesarios
+- Configuración de los namespaces `db-app` y `openshift-cluster-csi-drivers` con pod security `privileged`
 - SecretProviderClass de ejemplo
 - Pod de demostración que usa el CSI Driver
 
-### 6. Verificar el despliegue
+### 7. Verificar el despliegue
 
 Verifica que todas las Applications estén sincronizadas:
 
@@ -372,6 +399,165 @@ Si los ExternalSecrets no están sincronizando:
    ```bash
    kubectl logs -n external-secrets -l app.kubernetes.io/name=external-secrets
    ```
+
+### Error: Pod Security Policy - "uses an inline volume provided by CSIDriver"
+
+Si encuentras el siguiente error al desplegar el pod `dbapp`:
+
+```
+pods "dbapp" is forbidden: dbapp uses an inline volume provided by CSIDriver secrets-store.csi.k8s.io and namespace db-app has a pod security enforce level that is lower than privileged
+```
+
+**Solución**: El namespace `db-app` necesita tener la etiqueta de seguridad de pods configurada como `privileged` para permitir que los pods con volúmenes CSI se ejecuten. Aplica la siguiente configuración:
+
+```bash
+# Aplicar las etiquetas de pod security
+oc label ns db-app "pod-security.kubernetes.io/enforce=privileged" --overwrite
+oc label ns db-app "pod-security.kubernetes.io/audit=privileged" --overwrite
+oc label ns db-app "pod-security.kubernetes.io/warn=privileged" --overwrite
+```
+
+O verifica que el namespace tenga las etiquetas correctas:
+
+```bash
+# Verificar las etiquetas del namespace
+oc get namespace db-app -o yaml | grep pod-security
+```
+
+El namespace debería tener las siguientes etiquetas:
+- `pod-security.kubernetes.io/enforce: privileged`
+- `pod-security.kubernetes.io/audit: privileged`
+- `pod-security.kubernetes.io/warn: privileged`
+
+### Error: "provider not found: provider 'vault'"
+
+Si encuentras el siguiente error al desplegar el pod `dbapp`:
+
+```
+failed to mount secrets store objects for pod db-app/dbapp, err: error connecting to provider "vault": provider not found: provider "vault"
+```
+
+**Solución**: Este error indica que el Vault CSI Provider no está disponible. Sigue estos pasos para solucionarlo:
+
+0. **Aplicar SecurityContextConstraint (SCC) para el Vault CSI Provider** (requerido en OpenShift):
+
+   En OpenShift, el DaemonSet del Vault CSI Provider necesita un SCC que permita contenedores privileged y volúmenes hostPath:
+
+   ```bash
+   # Aplicar el SCC y los bindings necesarios
+   kubectl apply -f deploy/secrets-storage/vault-csi-provider-scc.yaml
+   ```
+
+   Esto creará:
+   - Un SecurityContextConstraint personalizado `vault-csi-provider` que permite privileged y hostPath
+   - Un ClusterRole y ClusterRoleBinding que asignan el SCC al service account del vault-csi-provider
+
+1. **Verificar que el SCC esté aplicado y asignado correctamente**:
+
+   ```bash
+   # Verificar el SCC
+   oc get scc vault-csi-provider
+
+   # Verificar el ClusterRoleBinding
+   oc get clusterrolebinding vault-csi-provider-scc
+
+   # Verificar que el service account tenga acceso al SCC
+   oc adm policy who-can use scc vault-csi-provider
+   ```
+
+2. **Verificar que el namespace `openshift-cluster-csi-drivers` tenga pod security `privileged`**:
+
+   ```bash
+   # Aplicar las etiquetas de pod security al namespace
+   oc label ns openshift-cluster-csi-drivers "pod-security.kubernetes.io/enforce=privileged" --overwrite
+   oc label ns openshift-cluster-csi-drivers "pod-security.kubernetes.io/audit=privileged" --overwrite
+   oc label ns openshift-cluster-csi-drivers "pod-security.kubernetes.io/warn=privileged" --overwrite
+   ```
+
+   O aplicar el archivo YAML:
+
+   ```bash
+   kubectl apply -f deploy/secrets-storage/openshift-cluster-csi-drivers-namespace.yaml
+   ```
+
+3. **Verificar que el DaemonSet del Vault CSI Provider esté ejecutándose**:
+
+   ```bash
+   # Verificar el DaemonSet
+   kubectl get daemonset vault-csi-provider -n openshift-cluster-csi-drivers
+
+   # Verificar los pods del provider
+   kubectl get pods -n openshift-cluster-csi-drivers | grep vault-csi-provider
+
+   # Verificar los logs si hay problemas
+   kubectl logs -n openshift-cluster-csi-drivers -l app.kubernetes.io/name=vault-csi-provider
+   ```
+
+4. **Verificar que el socket del provider esté disponible en los nodos**:
+
+   El Vault CSI Provider crea un socket en `/etc/kubernetes/secrets-store-csi-providers/vault.sock` en cada nodo. Puedes verificar esto ejecutando:
+
+   ```bash
+   # Verificar en un nodo (requiere acceso SSH o debug pod)
+   oc debug node/<node-name> -- chroot /host ls -la /etc/kubernetes/secrets-store-csi-providers/
+   ```
+
+5. **Verificar que el Secrets Store CSI Driver esté configurado correctamente**:
+
+   ```bash
+   # Verificar el DaemonSet del driver
+   kubectl get daemonset csi-secrets-store -n kube-system
+
+   # Verificar los pods del driver
+   kubectl get pods -n kube-system | grep csi-secrets-store
+   ```
+
+6. **Reiniciar los pods del Vault CSI Provider si es necesario**:
+
+   ```bash
+   # Eliminar los pods para que se recreen
+   kubectl delete pods -n openshift-cluster-csi-drivers -l app.kubernetes.io/name=vault-csi-provider
+   ```
+
+**Nota**: 
+- El archivo `vault-csi-provider-scc.yaml` se incluye en la carpeta `deploy/secrets-storage` y se aplicará automáticamente cuando se despliegue la Application de secrets-storage-csi.
+- El archivo `openshift-cluster-csi-drivers-namespace.yaml` se incluye en la carpeta `deploy/secrets-storage` y se aplicará automáticamente cuando se despliegue la Application de secrets-storage-csi. Sin embargo, si el namespace ya existe (creado por el operador), puede que necesites aplicar las etiquetas manualmente.
+
+### Error: SecurityContextConstraint - "unable to validate against any security context constraint"
+
+Si encuentras el siguiente error al desplegar el DaemonSet del Vault CSI Provider:
+
+```
+pods "vault-csi-provider-" is forbidden: unable to validate against any security context constraint: [provider "anyuid": Forbidden: not usable by user or serviceaccount, spec.volumes[0]: Invalid value: "hostPath": hostPath volumes are not allowed to be used, provider restricted-v2: .containers[0].privileged: Invalid value: true: Privileged containers are not allowed...]
+```
+
+**Solución**: En OpenShift, necesitas crear un SecurityContextConstraint (SCC) que permita contenedores privileged y volúmenes hostPath. Aplica el siguiente archivo:
+
+```bash
+# Aplicar el SCC y los bindings necesarios
+kubectl apply -f deploy/secrets-storage/vault-csi-provider-scc.yaml
+```
+
+Esto creará:
+- Un SecurityContextConstraint `vault-csi-provider` que permite:
+  - Contenedores privileged
+  - Volúmenes hostPath
+  - Todas las capacidades
+- Un ClusterRole y ClusterRoleBinding que asignan el SCC al service account `vault-csi-provider` en el namespace `openshift-cluster-csi-drivers`
+
+Verifica que el SCC esté aplicado:
+
+```bash
+# Verificar el SCC
+oc get scc vault-csi-provider
+
+# Verificar el ClusterRoleBinding
+oc get clusterrolebinding vault-csi-provider-scc
+
+# Verificar que el DaemonSet pueda crear pods ahora
+kubectl get daemonset vault-csi-provider -n openshift-cluster-csi-drivers
+kubectl get pods -n openshift-cluster-csi-drivers | grep vault-csi-provider
+```
 
 ## Estructura del Proyecto
 

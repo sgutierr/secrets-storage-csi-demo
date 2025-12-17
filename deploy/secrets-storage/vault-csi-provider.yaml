@@ -80,6 +80,7 @@ spec:
     spec:
       serviceAccountName: vault-csi-provider
       tolerations:
+        - operator: Exists
       containers:
         - name: provider-vault-installer
           image: docker.io/hashicorp/vault-csi-provider:1.4.1
@@ -89,6 +90,10 @@ spec:
           args:
             - -endpoint=/provider/vault.sock
             - -debug=false
+          ports:
+            - containerPort: 8080
+              name: healthz
+              protocol: TCP
           resources:
             requests:
               cpu: 50m
