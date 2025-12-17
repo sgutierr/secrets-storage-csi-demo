@@ -14,6 +14,10 @@ OpenShift Secrets Store CSI Driver Operator deployed and a default ClusterCSIDri
 A Vault server deployed on the that OpenShift Cluster
 
 
+application-argocd-vault-rbac.yaml
+
+
+
 Run create_vault_secrets.sh for filling Vault demo secrets
 
 Kubernetes authentication:
